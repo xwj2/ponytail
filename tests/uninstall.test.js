@@ -16,6 +16,7 @@ function runUninstall(env) {
 }
 
 delete process.env.CLAUDE_CONFIG_DIR;
+delete process.env.QODER_CONFIG_DIR;
 
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ponytail-uninstall-'));
 process.on('exit', () => fs.rmSync(temp, { recursive: true, force: true }));
@@ -36,6 +37,15 @@ const qoderCustomDir = path.join(temp, 'qoder-custom-config');
 const qoderCustomFlagPath = path.join(qoderCustomDir, '.ponytail-active');
 fs.mkdirSync(qoderCustomDir, { recursive: true });
 fs.writeFileSync(qoderCustomFlagPath, 'lite');
+
+// #1279: the tracker also writes per-project flags under the Qoder dir. A leftover one starts
+// a reinstall in the project's previous mode instead of the configured default.
+const qoderModesDir = path.join(home, '.qoder', 'ponytail-modes');
+fs.mkdirSync(qoderModesDir, { recursive: true });
+fs.writeFileSync(path.join(qoderModesDir, 'deadbeef'), 'ultra');
+const qoderCustomModesDir = path.join(qoderCustomDir, 'ponytail-modes');
+fs.mkdirSync(qoderCustomModesDir, { recursive: true });
+fs.writeFileSync(path.join(qoderCustomModesDir, 'cafe'), 'lite');
 
 // OpenCode keeps its flag beside its own config; a leftover "off" would start a
 // reinstall switched off.
@@ -92,6 +102,8 @@ assert.equal(fs.existsSync(flagPath), false, 'mode flag must be removed');
 assert.equal(fs.existsSync(qoderFlagPath), false, 'Qoder mode flag must be removed');
 assert.equal(fs.existsSync(opencodeFlagPath), false, 'OpenCode mode flag must be removed');
 assert.equal(fs.existsSync(qoderCustomFlagPath), true, 'default Qoder uninstall must not touch a separate custom config');
+assert.equal(fs.existsSync(qoderModesDir), false, 'Qoder per-project mode flags must be removed (#1279)');
+assert.equal(fs.existsSync(qoderCustomModesDir), true, 'default Qoder uninstall must not touch a separate custom config');
 assert.equal(fs.existsSync(nudgeFlagPath), false, 'statusline nudge flag must be removed');
 assert.equal(fs.existsSync(configPath), false, 'config file must be removed');
 assert.equal(fs.existsSync(cursorFlagPath), false, 'Cursor mode flag must be removed');
