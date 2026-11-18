@@ -5,6 +5,7 @@ import { boardHtml, tasksFrom } from './board'
 import type { Band } from './types'
 import type { Col } from './metrics'
 import {
+  DEF_PATHS,
   GREP_DEFS,
   NO_TOKENS,
   addTokens,
@@ -77,7 +78,8 @@ const band = atom({ plugin: 'ponytail', key: 'band' } as const, EMPTY)
 const load = async ($: EngineInterface): Promise<Band> => ({ ...EMPTY, ...(await read($, band)) })
 
 const union = (a: string[], b: string[]) => [...new Set([...a, ...b])]
-const base = (path: string) => path.replace(/\/+$/, '').split('/').pop() ?? path
+// Windows paths use either slash, so a POSIX-only split kept the whole path as the project name (#1342).
+const base = (path: string) => path.replace(/[/\\]+$/, '').split(/[/\\]/).pop() ?? path
 
 // Windows sets USERPROFILE, not HOME.
 const home = async ($: EngineInterface) => (await $.env.get('HOME')) ?? (await $.env.get('USERPROFILE'))
@@ -199,7 +201,7 @@ async function openBoard($: EngineInterface) {
 
 // Sets the band up for a session (level, project, task row, cost baseline); returns the definitions that exist now.
 async function start($: EngineInterface): Promise<Map<string, string>> {
-  const grep = await $.process.run(['git', 'grep', '--untracked', '-nE', GREP_DEFS]).catch(() => undefined)
+  const grep = await $.process.run(['git', 'grep', '-I', '--untracked', '-nE', GREP_DEFS, '--', ...DEF_PATHS]).catch(() => undefined)
   const level = await readLevel($)
   const details = (await $.store.get('details')) === true
   const repo = await $.session.repo().catch(() => null)
@@ -245,7 +247,8 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     const text = e.text.trim()
     if (e.origin.kind !== 'plugin' && text !== '' && !text.startsWith('/')) {
-      const name = (text.split('\n')[0] ?? '').slice(0, 60)
+      // Code points, not UTF-16 units: a slice could leave half an emoji in the ledger (#1384).
+      const name = [...(text.split(/\r?\n/)[0] ?? '')].slice(0, 60).join('')
       await update($, band, b => (b.name === '' ? { ...EMPTY, ...b, name } : b))
     }
     return next(e)
@@ -313,7 +316,7 @@ export const register: Register = (on, options) => {
     const stillRemoved: string[] = []
     const open: string[] = []
     for (const name of removed) {
-      const grep = await $.process.run(['git', 'grep', '--untracked', '-nw', '-e', name]).catch(() => undefined)
+      const grep = await $.process.run(['git', 'grep', '-I', '--untracked', '-nw', '-e', name]).catch(() => undefined)
       const rows = hits(grep?.stdout ?? '')
       if (rows.some(r => defsIn(r.file, r.text.trimStart()).includes(name))) continue
       const call = new RegExp(`(?<![\\w$])${name.replace(/\$/g, '\\$')}\\s*\\(`)
