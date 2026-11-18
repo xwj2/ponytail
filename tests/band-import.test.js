@@ -108,4 +108,17 @@ try {
   fs.rmSync(temp, { recursive: true, force: true });
 }
 
+// #1384: a name is capped at 60 code points, so a slice never leaves half an emoji in the ledger.
+const named = title => sessionStats([prompt('00:00', 'go'), reply('00:10', 'w1', u(1, 1)), { type: 'custom-title', customTitle: title }]).name;
+const fromPrompt = text => sessionStats([prompt('00:00', text), reply('00:10', 'w1', u(1, 1))]).name;
+assert.equal(named('😀'.repeat(61)), '😀'.repeat(60), 'a renamed session keeps 60 whole emoji');
+const mixedTitle = named('x'.repeat(59) + '😀 omitted');
+assert.equal([...mixedTitle].length, 60);
+assert.ok(mixedTitle.endsWith('😀'), 'the final emoji is not split in half');
+assert.ok(fromPrompt('x'.repeat(59) + '😀 omitted').endsWith('😀'), 'an imported prompt keeps whole code points too');
+// #1398: a CRLF prompt must not leave a \r that splits its ledger row in two.
+assert.equal(fromPrompt('Fix it\r\nsecond line'), 'Fix it');
+// The importer quotes a lone \r exactly like the band, so its rows stay whole too.
+assert.ok(csvRow('abcd1234-0000', 'shop', { ...s, name: 'Fix it\r' }).includes('"Fix it\r"'));
+
 console.log('band import checks passed');

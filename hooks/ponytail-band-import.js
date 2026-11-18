@@ -163,7 +163,7 @@ function sessionStats(records, subagentRecords = [], sessionId = '') {
   const started = records.map(ms).find(Number.isFinite);
   return {
     startedMs: started,
-    name: (titled.length ? titled[titled.length - 1].customTitle.trim() : first.split('\n')[0]).slice(0, 60),
+    name: [...(titled.length ? titled[titled.length - 1].customTitle.trim() : first.split(/\r?\n/)[0])].slice(0, 60).join(''),
     model: models.sort((a, b) => replies[b] - replies[a])[0],
     cost,
     own,
@@ -178,7 +178,7 @@ function sessionStats(records, subagentRecords = [], sessionId = '') {
 // Same stamp and quoting as the band (hooks/band/metrics.ts), so the board reads both alike.
 const two = n => String(n).padStart(2, '0');
 const stamp = t => { const d = new Date(t); return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())} ${two(d.getHours())}:${two(d.getMinutes())}`; };
-const field = v => { const s = v === null || v === undefined ? '' : String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+const field = v => { const s = v === null || v === undefined ? '' : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
 
 function csvRow(sessionId, project, s) {
   return [`${sessionId.slice(0, 8)}-${s.startedMs}`, stamp(s.startedMs), project, s.name, s.cost === null ? '' : s.cost.toFixed(2), s.turns,
