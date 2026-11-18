@@ -14,28 +14,33 @@ const path = require('path');
 const { execFileSync } = require('child_process');
 
 // Anything that is not a positive number keeps the default: "abc" made every line fit the cap,
-// and "0" / "-5" emptied the map (#1259).
+// and "0" / "-5" emptied the map (#1259). 60000 keeps the header, lines and footer below the
+// SessionStart hook's 64 KiB maxBuffer, which otherwise throws and drops the whole map (#1284).
 const chars = Number(process.env.PONYTAIL_MAP_CHARS);
-const BUDGET = Number.isFinite(chars) && chars > 0 ? chars : 2000;
+const BUDGET = Math.min(Number.isFinite(chars) && chars > 0 ? chars : 2000, 60000);
 const MAX_FILES = 4000;
 const SRC = /\.(py|js|jsx|mjs|cjs|ts|tsx|go|rs|rb|java|kt|php|swift|cs)$/;
-const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|out|vendor|venv|\.venv|__pycache__|coverage|\.next|target|migrations|versions|fixtures|tests?|__tests__|spec)(\/|$)/;
+const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|out|vendor|venv|\.venv|__pycache__|coverage|\.next|target|migrations|versions|fixtures|tests?|__tests__|spec|_old|old|archive|archived|deprecated|legacy)(\/|$)/;
 const SKIP_FILE = /(^|\/)(test_[^/]*|[^/]*(_test|\.test|\.spec|\.gen|\.min|\.d)\.[a-z]+)$/;
-const NAME = /^(?:type\s+)?(?:[\w$]+\s+as\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)$/;
+const NAME = /^(?:type\s+)?(?:[\w$]+\s+as\s+)?([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)(?:\s*:\s*[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)?)?$/;
 const SAFE_PATH = /^[\w.@+$()[\]\/-]+$/;
 const SHARED = /(util|helper|lib|common|shared|service|component|hook|core|model|schema|api)/i;
 
 const PATTERNS = {
   py: [/^(?:async\s+)?def\s+([A-Za-z]\w*)/gm, /^class\s+([A-Za-z]\w*)/gm],
-  js: [/^export\s+(?:default\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm,
-       /^export\s*\{([^}]*)\}/gm],
+  js: [/^export\s+(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:function\*?|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/gm,
+       /^export\s*\{([^}]*)\}/gm,
+       /^(?:module\.)?exports\s*=\s*(?:async\s+)?(?:function\*?|class)\s+([A-Za-z_$][\w$]*)/gm,
+       /^(?:module\.)?exports\s*=\s*\{([^}]*)\}/gm,
+       /^(?:module\.)?exports\.([A-Za-z_$][\w$]*)\s*=/gm],
   go: [/^func\s+(?:\([^)]*\)\s*)?([A-Z]\w*)/gm, /^type\s+([A-Z]\w*)/gm],
   rs: [/^pub\s+(?:async\s+)?(?:fn|struct|enum|trait|type)\s+(\w+)/gm],
   rb: [/^\s*(?:def|class|module)\s+([A-Za-z][\w.]*)/gm],
-  jvm: [/^\s*(?:public\s+)?(?:static\s+)?(?:final\s+)?(?:class|interface|enum|record)\s+(\w+)/gm],
+  jvm: [/^[ \t]*(?:(?:public|internal|static|final|abstract|sealed|open|data|enum|partial)[ \t]+)*(?:class|interface|enum|record)\s+(\w+)/gm],
+  php: [/^function\s+&?([A-Za-z_]\w*)/gm, /^\s*(?:(?:abstract|final|readonly)\s+)*(?:class|interface|enum|trait)\s+(\w+)/gm],
 };
 const LANG = { py: 'py', js: 'js', jsx: 'js', mjs: 'js', cjs: 'js', ts: 'js', tsx: 'js', go: 'go', rs: 'rs',
-               rb: 'rb', java: 'jvm', kt: 'jvm', swift: 'jvm', cs: 'jvm', php: 'jvm' };
+               rb: 'rb', java: 'jvm', kt: 'jvm', swift: 'jvm', cs: 'jvm', php: 'php' };
 
 function listFiles(root) {
   try {
@@ -51,7 +56,10 @@ function listFiles(root) {
     const out = [];
     (function walk(dir, depth) {
       if (depth > 6 || out.length > MAX_FILES * 5) return;
-      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      // A folder we may not read (EACCES, or macOS-protected ones under ~) is skipped, not fatal.
+      let ents;
+      try { ents = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
+      for (const ent of ents) {
         if (ent.name.startsWith('.')) continue;
         const rel = path.relative(root, path.join(dir, ent.name)).replace(/\\/g, '/');
         if (ent.isDirectory()) { if (!SKIP_DIR.test(rel + '/')) walk(path.join(dir, ent.name), depth + 1); }
@@ -68,7 +76,7 @@ function namesIn(file, text) {
   for (const re of PATTERNS[lang] || []) {
     for (const m of text.matchAll(re)) {
       for (const n of m[1].split(',').map((s) => (s.trim().match(NAME) || [])[1]).filter(Boolean)) {
-        if (!n.startsWith('_') && !names.includes(n)) names.push(n);
+        if (!n.startsWith('_') && !(lang === 'js' && n === 'default') && !names.includes(n)) names.push(n);
       }
     }
   }
@@ -78,8 +86,8 @@ function namesIn(file, text) {
 function buildMap(root = process.cwd()) {
   const files = listFiles(root)
     .filter((f) => SAFE_PATH.test(f) && SRC.test(f) && !SKIP_DIR.test(f) && !SKIP_FILE.test(f))
-    .slice(0, MAX_FILES)
-    .sort((a, b) => (SHARED.test(b) - SHARED.test(a)) || a.localeCompare(b));
+    .sort((a, b) => (SHARED.test(b) - SHARED.test(a)) || a.localeCompare(b))
+    .slice(0, MAX_FILES);
   // One line per directory: names are enough to know something exists; grep finds the file.
   const dirs = new Map();
   for (const f of files) {
