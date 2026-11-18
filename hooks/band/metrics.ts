@@ -25,6 +25,11 @@ const DEFS: [RegExp, RegExp[]][] = [
 // Lines worth a closer look; the per-language regexes above decide.
 export const GREP_DEFS = '^[[:space:]]*(export|async|def|class|function|func|pub|fn)[[:space:]]'
 
+// Only the extensions DEFS reads: without a pathspec the macOS ERE matcher runs over binary and
+// minified "lines" megabytes long, which reached an 18 GB footprint (#1416, #1443).
+export const DEF_PATHS = ['*.py', '*.js', '*.jsx', '*.ts', '*.tsx', '*.mjs', '*.cjs', '*.mts', '*.cts', '*.go', '*.rs', '*.rb',
+  ':(exclude)*.min.*', ':(exclude)**/node_modules/**', ':(exclude)**/vendor/**', ':(exclude)**/dist/**']
+
 // Names too generic to say anything about reuse.
 const GENERIC = new Set(['main', 'init', 'run', 'get', 'set', 'test', 'setup', 'open', 'close', 'read', 'write', 'start', 'stop', 'load', 'save', 'update', 'create', 'delete', 'handle', 'render', 'index', 'new', 'call', 'apply'])
 
@@ -83,9 +88,11 @@ export function inProject(file: string, root: string): boolean {
   return f === r || f.startsWith(`${r}/`)
 }
 
-const TEST_CMD = /\b(npm (run )?test|pnpm (run )?test|yarn test|bun test|npx (jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|dotnet test|node --test|deno test|make test)\b/
+// The runner has to be a segment's own command, so `cat jest.config.js`, `pip install pytest`
+// or `grep -r vitest src` never overwrite a real result with "pass" (#1396).
+const TEST_CMD = /^(?:[A-Za-z_]\w*=\S*\s+)*(?:[\w./-]+\/)?(?:npm (?:run )?test|pnpm (?:run )?test|yarn test|bun test|npx (?:jest|vitest)|jest|vitest|pytest|python3? -m pytest|go test|cargo test|mvn test|gradle test|rspec|phpunit|dotnet test|node --test|deno test|make test)\b/
 
-export const isTestCommand = (command: string) => TEST_CMD.test(command)
+export const isTestCommand = (command: string) => command.split(/&&|\|\||[;|\n]/).some(part => TEST_CMD.test(part.trim()))
 
 // Pass and fail counts from common runners: pytest, jest/vitest, cargo, node --test, TAP.
 export function testCounts(output: string): { passed?: number; failed?: number } {
@@ -176,7 +183,7 @@ export function sessionTitle(jsonl: string): string | undefined {
       const r = JSON.parse(line) as { type?: unknown; customTitle?: unknown }
       if (r.type !== 'custom-title') continue
       const title = typeof r.customTitle === 'string' ? r.customTitle.trim() : ''
-      return title === '' ? undefined : title.slice(0, 60)
+      return title === '' ? undefined : [...title].slice(0, 60).join('')
     } catch {
       continue
     }
@@ -275,7 +282,8 @@ export const CSV_HEADER = 'key,started,project,name,cost_usd,turns,agent_minutes
 
 const csvField = (v: string | number | null) => {
   const s = v === null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  // A lone \r ends a row in parseCsv too, so it has to be quoted (#1398).
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 export const csvRow = (s: Snapshot) =>
