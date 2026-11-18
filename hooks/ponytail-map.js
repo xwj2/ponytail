@@ -13,7 +13,10 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const BUDGET = Number(process.env.PONYTAIL_MAP_CHARS || 2000);
+// Anything that is not a positive number keeps the default: "abc" made every line fit the cap,
+// and "0" / "-5" emptied the map (#1259).
+const chars = Number(process.env.PONYTAIL_MAP_CHARS);
+const BUDGET = Number.isFinite(chars) && chars > 0 ? chars : 2000;
 const MAX_FILES = 4000;
 const SRC = /\.(py|js|jsx|mjs|cjs|ts|tsx|go|rs|rb|java|kt|php|swift|cs)$/;
 const SKIP_DIR = /(^|\/)(node_modules|\.git|dist|build|out|vendor|venv|\.venv|__pycache__|coverage|\.next|target|migrations|versions|fixtures|tests?|__tests__|spec)(\/|$)/;
