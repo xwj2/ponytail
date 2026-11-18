@@ -8,6 +8,7 @@ import {
   addedLines,
   callsIn,
   defsIn,
+  DEF_PATHS,
   duration,
   elapsed,
   fmtTokens,
@@ -147,6 +148,11 @@ describe('metrics', () => {
     expect(sessionTitle(JSON.stringify({ type: 'custom-title', customTitle: ' ' }))).toBeUndefined()
     expect(sessionTitle(JSON.stringify({ type: 'user', message: { content: 'no title yet' } }))).toBeUndefined()
     expect(sessionTitle(JSON.stringify({ type: 'custom-title', customTitle: 'x'.repeat(80) }))?.length).toBe(60)
+    // #1384: the cap counts code points, so the last emoji is never left as half a surrogate pair.
+    const mixed = sessionTitle(JSON.stringify({ type: 'custom-title', customTitle: 'x'.repeat(59) + '😀 omitted' }))
+    expect([...(mixed ?? '')].length).toBe(60)
+    expect(mixed?.endsWith('😀')).toBe(true)
+    expect(sessionTitle(JSON.stringify({ type: 'custom-title', customTitle: '😀'.repeat(61) }))).toBe('😀'.repeat(60))
   })
 
   test('the Markdown export holds every value and the task name', () => {
@@ -214,9 +220,47 @@ describe('metrics', () => {
     expect(isTestCommand('npm test')).toBe(true)
     expect(isTestCommand('cd api && python -m pytest -q')).toBe(true)
     expect(isTestCommand('npm install')).toBe(false)
+    // #1396: naming a runner is not running it. These used to overwrite a real failure with "pass".
+    expect(isTestCommand('cat jest.config.js')).toBe(false)
+    expect(isTestCommand('pip install pytest')).toBe(false)
+    expect(isTestCommand('grep -r vitest src')).toBe(false)
+    expect(isTestCommand('ls pytest.ini')).toBe(false)
+    expect(isTestCommand('echo jest')).toBe(false)
+    expect(isTestCommand('git commit -m "fix jest"')).toBe(false)
+    // Still a test run: env prefix, a path-qualified binary, and a later shell segment.
+    expect(isTestCommand('CI=1 npm test')).toBe(true)
+    expect(isTestCommand('./node_modules/.bin/jest')).toBe(true)
+    expect(isTestCommand('echo start; pytest')).toBe(true)
+    expect(isTestCommand('npm run test:unit')).toBe(true)
     expect(testCounts('===== 14 passed, 1 failed in 0.31s =====')).toEqual({ passed: 14, failed: 1 })
     expect(testCounts('ℹ pass 141\nℹ fail 1')).toEqual({ passed: 141, failed: 1 })
     expect(testCounts('ok')).toEqual({ passed: undefined, failed: undefined })
+  })
+
+  test('a task name with a carriage return stays in one ledger row (#1398)', () => {
+    const row = upsertCsv('', snapshot({ ...BASE, name: 'Fix it\r' }, Date.UTC(2026, 9, 15, 12, 0)))
+    const tasks = tasksFrom(row)
+    expect(tasks.length).toBe(1)
+    expect(tasks[0]?.name).toBe('Fix it\r')
+    expect(tasks[0]?.turns).toBe(6)
+    expect(tasks[0]?.agentMinutes).toBe(26)
+    // A lone CR, a CRLF and a quoted comma all survive the round trip.
+    for (const name of ['Fix it\r', 'a\r\nb', 'Fix "cart", totals\nand tax']) {
+      const got = tasksFrom(upsertCsv('', snapshot({ ...BASE, name }, Date.UTC(2026, 9, 15, 12, 0))))
+      expect(got.length).toBe(1)
+      expect(got[0]?.name).toBe(name)
+    }
+  })
+
+  test('the start-up grep reads only the extensions the band parses (#1416, #1443)', () => {
+    // Without a pathspec the macOS ERE matcher runs over binary and minified files and reaches GBs.
+    for (const ext of ['py', 'js', 'jsx', 'ts', 'tsx', 'mjs', 'cjs', 'mts', 'cts', 'go', 'rs', 'rb']) {
+      expect(DEF_PATHS).toContain(`*.${ext}`)
+    }
+    expect(DEF_PATHS).toContain(':(exclude)*.min.*')
+    expect(DEF_PATHS).toContain(':(exclude)**/node_modules/**')
+    expect(DEF_PATHS).toContain(':(exclude)**/vendor/**')
+    expect(DEF_PATHS).toContain(':(exclude)**/dist/**')
   })
 
   test('shows the reuse share only once there is something to share, and a readable time', () => {
